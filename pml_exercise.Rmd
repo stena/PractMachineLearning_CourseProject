@@ -1,0 +1,212 @@
+How well they did the Exercise?
+========================================================
+
+
+### SYNOPSIS
+Devices such as Jawbone Up, Nike FuelBand, and Fitbit are used to collect a large amount of data about personal activity.
+Generally, the individuals who use these devices take measurements about themselves regularly to improve their health.
+The data was recorded using accelerometers on the belt, forearm, arm, and dumbell of 6 participants.
+These participants were asked to perform the exercises both correctly and incorrectly, were categorized into five different classes of how well they did the exercise. 
+If they did the exercise well, then they were categorized as class "A". 
+If they did the exercise wrong, then they were categorized into four degrees of classes "B", "C", "D", and "E". 
+Our objective is to predict the manner in which they did the exercise.
+
+The data was accessed on: `r as.character(Sys.time())`.
+
+For additional information on the data, please refer to: http://groupware.les.inf.puc-rio.br/har#ixzz351rgjVNy
+
+
+### Clear the Environment
+```{r clearing}
+rm(list = ls())
+```
+
+
+### Set Options
+```{r setoptions}
+require(knitr)
+opts_chunk$set(echo=TRUE, cache=TRUE)
+```
+
+
+### Load required packages
+```{r requiredPackages}
+require(caret)
+require(randomForest)
+```
+
+### Download the data
+```{r loading}
+# create temp files for the data sets
+csvTrainFile <- tempfile()
+csvTestFile <- tempfile()
+
+# Download the training and test set
+download.file("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv?accessType=DOWNLOAD", csvTrainFile)
+download.file("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv?accessType=DOWNLOAD", csvTestFile)
+
+# Read the downloaded file into the R environment
+trainData <- read.csv(csvTrainFile, header=TRUE, sep=",")
+testData <- read.csv(csvTestFile, header=TRUE, sep=",")
+```
+
+### Exploring the data
+```{r exploring}
+str(trainData)                                                    # view the structure of the training set
+str(testData)                                                     # view the structure of the test set
+
+summary(trainData)                                                # summary of statistics of the training set
+summary(testData)                                                 # summary of statistics of the test set
+```
+A description of variables found within the data are:
+
+1) minimum (min) of the pitch, yaw, and roll on the belt, forearm, arm, and dumbell
+
+2) maximum (max) of the pitch, yaw, and roll on the belt, forearm, arm, and dumbell
+
+3) average (avg) of the pitch, yaw, and roll on the belt, forearm, arm, and dumbell
+
+4) variance (var) of the pitch, yaw, roll on the belt, forearm, arm, and dumbell, as well as the total acceleration on the belt.
+
+5) standard deviation (stddev) of the pitch, yaw, and roll on the belt, forearm, arm, and dumbell
+
+6) skewness of the pitch, yaw, and roll on the belt, forearm, arm, and dumbell
+
+7) kurtosis of the pitch, yaw, and roll on the belt, forearm, arm, and dumbell
+
+8) amplitude of the pitch, yaw, and roll on the belt, forearm, arm, and dumbell
+
+9) gyroscope (gyros) of the x, y, z on the belt, forearm, arm, and dumbell
+
+10) magnitude (mag) of the x, y, z on the belt, forearm, arm, and dumbell
+
+11) acceleration (accel) of the x, y, z on the belt, forearm, arm, and dumbell
+
+12) total of acceleration (total_accel) on the belt, forearm, arm, and dumbell
+
+### Processing
+The following updates were made (Any updates made to the training set, were emulated in test set accordingly):
+
+1) Remove the column variable X from the data set because column variable X is equivalent to the rownames of the data set. In addition, the test set variable problem_id is equivalent to the rownames of the data set as well.
+
+2) Convert factor variables to indicator variables 
+(Note: The test set variable "new_window" has the values of all "no", so all the indicator values of "no" will be "1", as for all the indicator values of "yes" will be "0")
+
+3) Convert miss classified column's data types into appropriate data types
+
+4) Remove columns with more than 97% percent of values equal to NA (missing value)
+
+5) Remove columns with near zero variable, meaning variables with little variance
+```{r processing}
+## Remove the column variable X from the data set because column variable X is equivalent to the rownames of the data set
+trainData <- trainData[, -which(colnames(trainData) == "X")]
+testData <- testData[, -which(colnames(testData) == "X")]
+testData <- testData[, -which(colnames(testData) == "problem_id")]
+
+
+## Convert factor variables to indicator variables
+dummiesTrain <- dummyVars(classe ~ new_window, data=trainData)
+trainData <- cbind( trainData, as.data.frame(predict(dummiesTrain, trainData)) )                # bind indicator variables to training set
+trainData <- trainData[, -which(colnames(trainData) == "new_window")]                           # drop factor variable from training set
+
+# convert factor variables to indicator variables
+testData$new_window.no <- rep(1, dim(testData)[1])                                              # bind "no" indicator variable to test set
+testData$new_window.yes <- rep(0, dim(testData)[1])                                             # bind "yes" indicator variable to test set
+testData <- testData[, -which(colnames(testData) == "new_window")]                              # drop factor variable from test set
+
+
+## Convert miss classified column's data types into appropriate data types
+trainData$cvtd_timestamp <- strptime(trainData[, "cvtd_timestamp"], format="%d/%m/%Y %H:%M")    # convert from factor to datetime
+testData$cvtd_timestamp <- strptime(testData[, "cvtd_timestamp"], format="%d/%m/%Y %H:%M")      # convert from factor to datetime
+# Record the variables that will be considered factors
+factorVars <- which( colnames(trainData) %in% c("user_name", "raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp") )
+
+# convert non considered factor variables into numeric variables of training set
+trainData[, -c(factorVars, which(colnames(trainData) == "classe"))] <- lapply(trainData[, -c(factorVars, which(colnames(trainData) == "classe"))], as.numeric)
+# convert non considered factor variables into numeric variables of test set
+testData[, -factorVars] <- lapply(testData[, -factorVars], as.numeric)
+
+
+## Remove columns with more than 97% percent of values equal to NA (missing value)
+percNACount <- colSums(is.na(trainData[, which( colnames(trainData) != "classe" )])) / dim(trainData)[1]   # percentage of NA's in each column
+tidyTrainData <- trainData[ , -which(percNACount >= 0.97)]                                     # drop columns with more than 97% values equal to NA
+tidyTestData <- testData[ , -which(percNACount >= 0.97)]                                       # drop the same columns of the training set from the test set
+
+
+## Remove columns with near zero variable, meaning variables with little variance
+# Record variables that will be ignored for applying near zero variable (Conflicting data types (characters and dates), outcome variable)
+ignoreVars <- which( colnames(tidyTrainData) %in% c("user_name", "cvtd_timestamp", "classe") )
+
+nsv <- nearZeroVar(tidyTrainData[, -ignoreVars], saveMetrics=TRUE)   # near zero variable columns from tidy training set
+tidyTrainData <- tidyTrainData[, -which(colnames(tidyTrainData) %in% rownames(nsv[which(nsv$nzv == TRUE), ]))]   # drop columns with near zero variable from tidy training set
+tidyTestData <- tidyTestData[, -which(colnames(tidyTestData) %in% rownames(nsv[which(nsv$nzv == TRUE), ]))]      # drop the same columns of tidy training set from tidy test set
+```
+
+### How did you build your model?
+1) Partitioned the loaded training set into both a training (60%) and validation (40%) set using a single random sub sample
+
+2) Fitted the model using Breiman's random forest algorithm (prediction model)
+```{r crossValidation}
+## Partition the loaded training set
+set.seed(1234)                                                                                                  # random number generator (RNG) state
+inTrain <- createDataPartition(tidyTrainData$classe, p=0.60, list=FALSE)                                        # partition data into a training (60%) and validation set (40%)
+training <- tidyTrainData[inTrain, ]                                                                            # extract training set
+validation <- tidyTrainData[-inTrain, ]                                                                         # extract validation set
+```
+
+```{r buildingModel}
+## fit the model using Breiman's random forest algorithm (prediction model)
+modelFit <- randomForest(classe ~., proximity=TRUE, data=training[, -which( colnames(tidyTrainData) %in% c("user_name", "cvtd_timestamp") )])
+```
+
+### How did you use the cross validation?
+Used the cross validated set to:
+
+1) predict the validation set using the prediction model 
+
+2) cross-tabulate the observed and predicted classes with associated statistics (confusionMatrix)
+```{r predictValidationSet}
+## predict the results of the validation set of the fitted model
+predictValidation <- predict(modelFit, validation[, -ignoreVars])
+
+## cross-tabulation of observed and predicted classes with associated statistics
+temp <- confusionMatrix(predictValidation, validation$classe)
+temp
+```
+
+### What do you think the expected out of sample error is?
+The expected out of sample error is to be considered minimized, meaning that the accuracy of prediction is maximized. We expect this because the tree is grown to maximum size, without pruning. This subspace randomization scheme, is blended with bagging to resample with replacement of the training data set each time a new individual tree is grown. The accuracy has the value of `r temp[[3]][[1]]`, meaning `r temp[[3]][[1]] * 100`%. This outcome is exactly what we expected, a high accuracy.
+
+### Why did you make the choices you did?
+By choosing to use Breiman's random forest algorithm we are able to classify an outcome variable by using the predictor variables with a great degree of accuracy due to the box cox sampling that occurs behind the scenes
+
+### How did you use the cross validation? (Cont'd.)
+Used the cross validated set to:
+
+1) predict 20 different test cases using the prediction model
+(Note: since the loaded test set lacks the variable classe, no confusion matrix could be generated)
+```{r predictTestSet}
+## predict the results of the test set of the fitted model
+predictTest <- predict(modelFit, tidyTestData[, -which( colnames(tidyTestData) %in% c("user_name", "cvtd_timestamp") )])
+
+predictTest                                                                                                   # display the predicted results of the test set of the fitted model
+```
+
+
+### Citations:
+1) Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements. Proceedings of 21st Brazilian Symposium on Artificial Intelligence. Advances in Artificial Intelligence - SBIA 2012. In: Lecture Notes in Computer Science. , pp. 52-61. Curitiba, PR: Springer Berlin / Heidelberg, 2012. ISBN 978-3-642-34458-9. DOI: 10.1007/978-3-642-34459-6_6.
+
+Read more: http://groupware.les.inf.puc-rio.br/har#ixzz351oBRrD0
+
+2) Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+Read more: http://groupware.les.inf.puc-rio.br/har#ixzz351oNV0n1
+
+3) Ugulino, W.; Ferreira, M.; Velloso, E.; Fuks, H. Virtual Caregiver: Colabora??o de Parentes no Acompanhamento de Idosos. Anais do SBSC 2012, IX Simp?sio Brasileiro de Sistemas Colaborativos , pp. 43-48. S?o Paulo, SP: IEEE, 2012. ISBN 978-0-7695-4890-6.
+
+Read more: http://groupware.les.inf.puc-rio.br/har#ixzz351oVcjkC
+
+
+4) Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+Read more: http://groupware.les.inf.puc-rio.br/har#ixzz351mrJsRA
